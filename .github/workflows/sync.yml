@@ -1,0 +1,32 @@
+name: Preface Calendar Sync
+
+on:
+  schedule:
+    - cron: '23 22 * * *'   # 06:23 Asia/Hong_Kong daily (UTC+8, no DST)
+  workflow_dispatch:         # manual trigger from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Decode service account credentials
+        run: |
+          echo "${{ secrets.SERVICE_ACCOUNT_JSON_B64 }}" | base64 --decode > service-account.json
+
+      - name: Run sync
+        env:
+          PREFACE_TEACHER_ID: ${{ secrets.PREFACE_TEACHER_ID }}
+          PREFACE_SCRIPT_URL: ${{ secrets.PREFACE_SCRIPT_URL }}
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
+        run: python3 main.py
