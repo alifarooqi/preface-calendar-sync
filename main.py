@@ -75,7 +75,8 @@ def fetch_schedule():
     inner = json.loads(data[0][1][1])
 
     classes = inner.get("classes", [])
-    log.info("Received %d classes", len(classes))
+    admin_blocks = inner.get("adminBlocks", [])
+    log.info("Received %d classes, %d admin blocks", len(classes), len(admin_blocks))
 
     events = []
     for cls in classes:
@@ -95,8 +96,50 @@ def fetch_schedule():
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "location": cls.get("location", ""),
+            "type": "class",
         })
 
+    # Skip admin blocks already auto-merged into a class — the class entry
+    # carries the merged block's id in originalRequests[].blockId. Without
+    # this guard we'd duplicate "Applied AI with Claude" once it's merged.
+    merged_block_ids = {
+        orig["blockId"]
+        for cls in classes
+        for orig in (cls.get("originalRequests") or [])
+        if orig.get("blockId")
+    }
+
+    skipped_merged = 0
+    for blk in admin_blocks:
+        if blk.get("id") in merged_block_ids:
+            skipped_merged += 1
+            continue
+
+        start_dt = datetime(
+            *map(int, blk["date"].split("-")),
+            *map(int, blk["start"].split(":")),
+            tzinfo=TZ,
+        )
+        end_dt = datetime(
+            *map(int, blk["date"].split("-")),
+            *map(int, blk["end"].split(":")),
+            tzinfo=TZ,
+        )
+
+        title = (blk.get("title") or "").strip()
+        genre = (blk.get("genre") or "").strip()
+        summary = f"{title} ({genre})" if genre else title
+
+        events.append({
+            "summary": summary,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "location": blk.get("location", ""),
+            "type": "admin",
+        })
+
+    if skipped_merged:
+        log.info("Skipped %d admin block(s) already merged into a class", skipped_merged)
 
     if not events:
         log.warning("No events returned from the API.")
@@ -157,7 +200,10 @@ def sync_to_google_calendar(events, service, dry_run=False):
             "start": {"dateTime": ev["start"], "timeZone": "Asia/Hong_Kong"},
             "end": {"dateTime": ev["end"], "timeZone": "Asia/Hong_Kong"},
             "extendedProperties": {
-                "private": {"source": SYNC_SOURCE},
+                "private": {
+                    "source": SYNC_SOURCE,
+                    "type": ev.get("type", "class"),
+                },
             },
         }
         if dry_run:
