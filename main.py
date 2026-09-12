@@ -21,7 +21,8 @@ def _required_env(name: str) -> str:
 
 
 TEACHER_ID = _required_env("PREFACE_TEACHER_ID")
-SCRIPT_URL = _required_env("PREFACE_SCRIPT_URL")
+DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby0i7u-CXSe3T2tC18yUA-liQ-XJOMTHbhufmKgJ9PlHztqKo68gBojFzD_MO8FGNcfUg"
+SCRIPT_URL = os.environ.get("PREFACE_SCRIPT_URL", DEFAULT_SCRIPT_URL)
 CALENDAR_ID = _required_env("GOOGLE_CALENDAR_ID")
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 TZ = ZoneInfo("Asia/Hong_Kong")
