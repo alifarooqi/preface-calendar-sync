@@ -96,6 +96,7 @@ def fetch_schedule():
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "location": cls.get("location", ""),
+            "description": cls.get("note", "") or "",
             "type": "class",
         })
 
@@ -135,6 +136,7 @@ def fetch_schedule():
             "start": start_dt.isoformat(),
             "end": end_dt.isoformat(),
             "location": blk.get("location", ""),
+            "description": blk.get("info", "") or "",
             "type": "admin",
         })
 
@@ -206,8 +208,17 @@ def sync_to_google_calendar(events, service, dry_run=False):
                 },
             },
         }
+        description = ev.get("description") or ""
+        if description:
+            event_body["description"] = description
         if dry_run:
-            log.info("[DRY RUN] Would create: %s at %s", ev["summary"], ev["start"])
+            desc = ev.get("description") or ""
+            log.info(
+                "[DRY RUN] Would create: %s at %s%s",
+                ev["summary"],
+                ev["start"],
+                f"\n    {desc}" if desc else "",
+            )
         else:
             try:
                 created_event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
