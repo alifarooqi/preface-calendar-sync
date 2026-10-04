@@ -32,10 +32,9 @@ In your fork: **Settings** → **Secrets and variables** → **Actions** → **N
 | Name | Value |
 |------|-------|
 | `SERVICE_ACCOUNT_JSON_B64` | The base64 string from step 2 |
-| `PREFACE_TEACHER_ID` | Your Preface teacher ID |
+| `PREFACE_LOGIN` | Your Preface email (used to log into the portal) |
+| `PREFACE_PASSWORD` | Your Preface password |
 | `GOOGLE_CALENDAR_ID` | The calendar ID from step 3 |
-
-`PREFACE_SCRIPT_URL` has a built-in default and can be omitted unless Preface changes the endpoint.
 
 ### 6. Trigger a run
 **Actions** → **Preface Calendar Sync** → **Run workflow**. Classes should appear in your calendar within a minute.
@@ -44,11 +43,11 @@ In your fork: **Settings** → **Secrets and variables** → **Actions** → **N
 
 Create a `.env`:
 ```
-PREFACE_TEACHER_ID=???
+PREFACE_LOGIN=???
+PREFACE_PASSWORD=???
 GOOGLE_CALENDAR_ID=???
 ```
 
-`PREFACE_SCRIPT_URL` is optional — it has a default; set it only if Preface changes the endpoint.
 Place your downloaded `service-account.json` in the repo root, then:
 ```sh
 pip install -r requirements.txt

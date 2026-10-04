@@ -26,6 +26,7 @@ jobs:
 
       - name: Run sync
         env:
-          PREFACE_TEACHER_ID: ${{ secrets.PREFACE_TEACHER_ID }}
+          PREFACE_LOGIN: ${{ secrets.PREFACE_LOGIN }}
+          PREFACE_PASSWORD: ${{ secrets.PREFACE_PASSWORD }}
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
         run: python3 main.py
