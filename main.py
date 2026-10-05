@@ -214,6 +214,13 @@ def main():
     arg_parser.add_argument("--dry-run", action="store_true", help="Print actions without modifying the calendar")
     args = arg_parser.parse_args()
 
+    # Production runs go through GitHub Actions; on a public repo those logs
+    # become visible to anyone. Suppress routine output (which would otherwise
+    # leak student PII — names, times, locations) when not in dry-run mode.
+    # Errors still surface via Python's traceback on uncaught exceptions.
+    if not args.dry_run:
+        logging.getLogger().setLevel(logging.CRITICAL)
+
     service = get_calendar_service()
     events = fetch_schedule()
     sync_to_google_calendar(events, service, dry_run=args.dry_run)
