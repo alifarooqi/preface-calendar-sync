@@ -162,6 +162,9 @@ service-account.json
 credentials.json
 token.json
 
+# HAR (HTTP Archive) captures often contain session cookies/tokens
+*.har
+
 # OS
 .DS_Store
 

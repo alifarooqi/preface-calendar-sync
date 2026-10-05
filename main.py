@@ -1,8 +1,7 @@
 import argparse
-import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -20,13 +19,32 @@ def _required_env(name: str) -> str:
     return value
 
 
-TEACHER_ID = _required_env("PREFACE_TEACHER_ID")
-DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby0i7u-CXSe3T2tC18yUA-liQ-XJOMTHbhufmKgJ9PlHztqKo68gBojFzD_MO8FGNcfUg"
-SCRIPT_URL = os.environ.get("PREFACE_SCRIPT_URL", DEFAULT_SCRIPT_URL)
+PREFACE_LOGIN = _required_env("PREFACE_LOGIN")
+PREFACE_PASSWORD = _required_env("PREFACE_PASSWORD")
 CALENDAR_ID = _required_env("GOOGLE_CALENDAR_ID")
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 TZ = ZoneInfo("Asia/Hong_Kong")
 SYNC_SOURCE = "preface-sync"
+
+PORTAL_BASE = "https://portal.preface.ai"
+NOMAD_ORIGIN = "https://nomad.preface.ai"
+LOGIN_PATH = "/api/np/users/login"
+PROFILE_PATH = "/api/np/user/profile"
+CALENDAR_PATH = "/api/np/nomad/show_calendar"
+SYNC_DAYS = 60
+
+
+def _nomad_headers(jwt=None):
+    """Common headers for portal.preface.ai calls. Adds Bearer auth when jwt given."""
+    headers = {
+        "content-type": "application/json; charset=utf-8",
+        "preface-client": "np-web",
+        "origin": NOMAD_ORIGIN,
+        "referer": f"{NOMAD_ORIGIN}/",
+    }
+    if jwt:
+        headers["authorization"] = f"Bearer {jwt}"
+    return headers
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,105 +62,68 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=credentials)
 
 
-def fetch_schedule():
-    """Fetches class schedule from the Preface Apps Script API."""
-    now = datetime.now(TZ)
-    year = now.year
-    month = now.month
-
-    log.info("Fetching schedule for teacher %s, %d-%02d", TEACHER_ID, year, month)
-
-    # The API expects: request=["getTeacherSchedule","[teacherId,year,month,true]",null,[0],null,null,1,0]
-    args = json.dumps([int(TEACHER_ID), year, month, True])
-    payload = {
-        "request": json.dumps(["getTeacherSchedule", args, None, [0], None, None, 1, 0]),
-    }
-
+def _login():
+    """POST /api/np/users/login and return the JWT from the Authorization response header."""
+    log.info("Logging in to portal.preface.ai as %s", PREFACE_LOGIN)
     response = requests.post(
-        f"{SCRIPT_URL}/callback",
-        data=payload,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-            "X-Same-Domain": "1",
-        },
+        f"{PORTAL_BASE}{LOGIN_PATH}",
+        json={"user": {"login": PREFACE_LOGIN, "password": PREFACE_PASSWORD}},
+        headers=_nomad_headers(),
+        timeout=30,
     )
     response.raise_for_status()
 
-    # Strip XSSI guard )]}'
-    text = response.text.lstrip(")]}'\n")
-    data = json.loads(text)
+    auth = response.headers.get("authorization") or response.headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        raise RuntimeError(
+            "Login succeeded but no Bearer token found in response headers. "
+            "The portal API may have changed."
+        )
+    return auth[7:]
 
-    # Unwrap: [["op.exec", [0, "{...json...}"]]]
-    inner = json.loads(data[0][1][1])
 
-    classes = inner.get("classes", [])
-    admin_blocks = inner.get("adminBlocks", [])
-    log.info("Received %d classes, %d admin blocks", len(classes), len(admin_blocks))
+def _get_user_id(jwt):
+    """GET /api/np/user/profile and return the user's numeric id."""
+    response = requests.get(
+        f"{PORTAL_BASE}{PROFILE_PATH}",
+        headers=_nomad_headers(jwt),
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["data"]["id"]
+
+
+def fetch_schedule():
+    """Fetches the next SYNC_DAYS of booked classes from the Preface portal API."""
+    now = datetime.now(TZ)
+    start_date = now.date().isoformat()
+    end_date = (now + timedelta(days=SYNC_DAYS)).date().isoformat()
+
+    jwt = _login()
+    user_id = _get_user_id(jwt)
+    log.info("Fetching schedule for user %s, %s → %s", user_id, start_date, end_date)
+
+    response = requests.get(
+        f"{PORTAL_BASE}{CALENDAR_PATH}",
+        params={"user_id": user_id, "start_date": start_date, "end_date": end_date},
+        headers=_nomad_headers(jwt),
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    schedules = response.json().get("data", {}).get("schedules", [])
+    log.info("Received %d booked class(es)", len(schedules))
 
     events = []
-    for cls in classes:
-        start_dt = datetime(
-            *map(int, cls["date"].split("-")),
-            *map(int, cls["start"].split(":")),
-            tzinfo=TZ,
-        )
-        end_dt = datetime(
-            *map(int, cls["date"].split("-")),
-            *map(int, cls["end"].split(":")),
-            tzinfo=TZ,
-        )
-
+    for s in schedules:
         events.append({
-            "summary": f"{cls['course']} - {cls['students']}".strip(" -"),
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-            "location": cls.get("location", ""),
-            "description": cls.get("note", "") or "",
+            "summary": f"{s.get('title', '')} - {s.get('student_name', '')}".strip(" -"),
+            "start": s["time"],
+            "end": s["endTime"],
+            "location": s.get("address", "") or "",
+            "description": s.get("admin_remarks") or "",
             "type": "class",
         })
-
-    # Skip admin blocks already auto-merged into a class — the class entry
-    # carries the merged block's id in originalRequests[].blockId. Without
-    # this guard we'd duplicate "Applied AI with Claude" once it's merged.
-    merged_block_ids = {
-        orig["blockId"]
-        for cls in classes
-        for orig in (cls.get("originalRequests") or [])
-        if orig.get("blockId")
-    }
-
-    skipped_merged = 0
-    for blk in admin_blocks:
-        if blk.get("id") in merged_block_ids:
-            skipped_merged += 1
-            continue
-
-        start_dt = datetime(
-            *map(int, blk["date"].split("-")),
-            *map(int, blk["start"].split(":")),
-            tzinfo=TZ,
-        )
-        end_dt = datetime(
-            *map(int, blk["date"].split("-")),
-            *map(int, blk["end"].split(":")),
-            tzinfo=TZ,
-        )
-
-        title = (blk.get("title") or "").strip()
-        genre = (blk.get("genre") or "").strip()
-        summary = f"{title} ({genre})" if genre else title
-
-        events.append({
-            "summary": summary,
-            "start": start_dt.isoformat(),
-            "end": end_dt.isoformat(),
-            "location": blk.get("location", ""),
-            "description": blk.get("info", "") or "",
-            "type": "admin",
-        })
-
-    if skipped_merged:
-        log.info("Skipped %d admin block(s) already merged into a class", skipped_merged)
 
     if not events:
         log.warning("No events returned from the API.")
