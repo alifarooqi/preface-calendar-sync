@@ -2,7 +2,7 @@ name: Preface Calendar Sync
 
 on:
   schedule:
-    - cron: '23 22 * * *'   # 06:23 Asia/Hong_Kong daily (UTC+8, no DST)
+    - cron: '0 21 * * *'    # 05:00 Asia/Hong_Kong daily (UTC+8, no DST)
   workflow_dispatch:         # manual trigger from the Actions tab
 
 jobs:
