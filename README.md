@@ -15,9 +15,17 @@ Syncs your Preface class schedule into a Google Calendar on a daily cron.
 2. **IAM & Admin** → **Service Accounts** → **Create service account**. No role needed.
 3. Open the account → **Keys** → **Add key** → **Create new key** → **JSON**. Save the file.
 4. Base64-encode it for GitHub:
+
+   macOS / Linux:
    ```sh
    base64 -i service-account.json | tr -d '\n'
    ```
+
+   Windows (PowerShell):
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("service-account.json"))
+   ```
+
    Copy the output — you'll paste it as a secret.
 
 ### 3. Create a new Google Calendar
