@@ -4,6 +4,17 @@
 
 Syncs your Preface class schedule into a Google Calendar on a daily cron.
 
+## What gets synced
+
+- **Booked classes** — one event per class, titled `<class> - <student>`.
+- **Pencilled slots** — tentative holds in the portal are synced too, as
+  Google Calendar *tentative* events prefixed with ✏️. Their description
+  names who pencilled them. They still block the time as busy.
+
+Each synced event is tagged with `source=preface-sync` and `type=class` or
+`type=pencil` in its private extended properties, so you can filter or
+bulk-select them in Google Calendar.
+
 ## Setup (forked repo)
 
 ### 1. Fork & enable Actions
