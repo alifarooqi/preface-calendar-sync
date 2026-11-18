@@ -93,11 +93,16 @@ def _get_user_id(jwt):
     return response.json()["data"]["id"]
 
 
-def fetch_schedule():
-    """Fetches the next SYNC_DAYS of booked classes from the Preface portal API."""
+def sync_window():
+    """Return (start_date, end_date) covering today through SYNC_DAYS from now."""
     now = datetime.now(TZ)
-    start_date = now.date().isoformat()
-    end_date = (now + timedelta(days=SYNC_DAYS)).date().isoformat()
+    return now.date(), (now + timedelta(days=SYNC_DAYS)).date()
+
+
+def fetch_schedule(start_date, end_date):
+    """Fetches booked classes and pencilled slots for the given date range."""
+    start_date = start_date.isoformat()
+    end_date = end_date.isoformat()
 
     jwt = _login()
     user_id = _get_user_id(jwt)
@@ -111,7 +116,8 @@ def fetch_schedule():
     )
     response.raise_for_status()
 
-    schedules = response.json().get("data", {}).get("schedules", [])
+    data = response.json().get("data", {})
+    schedules = data.get("schedules", [])
     log.info("Received %d booked class(es)", len(schedules))
 
     events = []
@@ -125,10 +131,40 @@ def fetch_schedule():
             "type": "class",
         })
 
+    pencil_marks = data.get("pencil_marks", [])
+    log.info("Received %d pencilled slot(s)", len(pencil_marks))
+
+    for mark in pencil_marks:
+        start = mark.get("started_at")
+        end = mark.get("ended_at")
+        if not start or not end:
+            log.warning("Skipping pencilled slot on %s: missing time", mark.get("date"))
+            continue
+
+        reason = (mark.get("reason") or "").strip()
+        # The portal uses placeholders like "/" when no reason was given.
+        summary = f"✏️ {reason}" if reason not in {"", "/", "-"} else "✏️ Pencilled slot"
+
+        events.append({
+            "summary": summary,
+            "start": start,
+            "end": end,
+            "location": mark.get("location", "") or "",
+            "description": _pencil_description(mark),
+            "type": "pencil",
+        })
+
     if not events:
         log.warning("No events returned from the API.")
 
     return events
+
+
+def _pencil_description(mark):
+    """Description for a pencilled slot, noting it is tentative and who pencilled it."""
+    pencilled_by = (mark.get("pencilled_by_name") or "").strip()
+    note = "Tentative slot pencilled in Preface — not yet confirmed."
+    return f"{note} Pencilled by {pencilled_by}." if pencilled_by else note
 
 
 def _month_range(year, month):
@@ -141,14 +177,25 @@ def _month_range(year, month):
     return time_min, time_max
 
 
-def clear_synced_events(service, events, dry_run=False):
-    """Deletes previously synced events for all months covered by the given events."""
-    months = set()
-    for ev in events:
-        dt = datetime.fromisoformat(ev["start"])
-        months.add((dt.year, dt.month))
+def _months_between(start_date, end_date):
+    """Return every (year, month) touched by the inclusive date range."""
+    months = []
+    cursor = start_date.replace(day=1)
+    while cursor <= end_date:
+        months.append((cursor.year, cursor.month))
+        cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return months
 
-    for year, month in months:
+
+def clear_synced_events(service, start_date, end_date, dry_run=False):
+    """Deletes previously synced events for every month in the sync window.
+
+    Clearing the whole window rather than only months that currently have
+    events matters for pencilled slots: a pencil mark can be withdrawn or
+    confirmed without ever becoming a class, so there may be no event left
+    in its month to derive the range from and its synced copy would linger.
+    """
+    for year, month in _months_between(start_date, end_date):
         time_min, time_max = _month_range(year, month)
         log.info("Clearing synced events for %d-%02d...", year, month)
 
@@ -168,13 +215,13 @@ def clear_synced_events(service, events, dry_run=False):
                 service.events().delete(calendarId=CALENDAR_ID, eventId=event["id"]).execute()
 
 
-def sync_to_google_calendar(events, service, dry_run=False):
+def sync_to_google_calendar(events, service, start_date, end_date, dry_run=False):
     """Pushes events into Google Calendar, clearing old synced entries first."""
     if not events:
         log.info("No events found to sync.")
         return
 
-    clear_synced_events(service, events, dry_run=dry_run)
+    clear_synced_events(service, start_date, end_date, dry_run=dry_run)
 
     log.info("Writing %d events into Google Calendar...", len(events))
     for ev in events:
@@ -190,6 +237,11 @@ def sync_to_google_calendar(events, service, dry_run=False):
                 },
             },
         }
+        if ev.get("type") == "pencil":
+            # Pencilled slots are held but not confirmed: keep them visible as
+            # tentative while still blocking the time in availability lookups.
+            event_body["status"] = "tentative"
+            event_body["transparency"] = "opaque"
         description = ev.get("description") or ""
         if description:
             event_body["description"] = description
@@ -222,8 +274,9 @@ def main():
         logging.getLogger().setLevel(logging.CRITICAL)
 
     service = get_calendar_service()
-    events = fetch_schedule()
-    sync_to_google_calendar(events, service, dry_run=args.dry_run)
+    start_date, end_date = sync_window()
+    events = fetch_schedule(start_date, end_date)
+    sync_to_google_calendar(events, service, start_date, end_date, dry_run=args.dry_run)
     log.info("Sync complete!")
 
 
